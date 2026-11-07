@@ -1,7 +1,7 @@
 # BlockMC
 
 Modern Minecraft Java launcher. Tauri 2 + Rust + React/TypeScript. License: GPL-3.0-or-later
-(compatible with reusing PolyMC's GPL-3.0 code as reference).
+
 
 ## Run
     npm install
