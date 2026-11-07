@@ -38,6 +38,9 @@ pub struct InstalledMod {
     pub kind: ProjectKind,
     pub filename: String,
     pub sha512: String,
+    /// Project ids of required dependencies (used to warn before removing something others need).
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 pub fn compatible_loaders(l: Loader) -> Result<Vec<&'static str>, CoreError> {
@@ -54,10 +57,12 @@ pub fn valid_project_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-pub fn safe_filename(name: &str, kind: ProjectKind) -> Result<String, CoreError> {
+pub fn safe_filename(name: &str, kind: ProjectKind) -> Result<String, CoreError> { safe_name_with_ext(name, kind.ext()) }
+
+pub fn safe_name_with_ext(name: &str, ext: &str) -> Result<String, CoreError> {
     let bad = name.is_empty() || name.len() > 200 || name.starts_with('.') || name.contains("..")
         || name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'));
-    if bad || !name.to_lowercase().ends_with(kind.ext()) {
+    if bad || !name.to_lowercase().ends_with(ext) {
         return Err(CoreError::UnsafeFilename(name.to_string()));
     }
     Ok(name.to_string())
@@ -113,6 +118,12 @@ pub fn content_dir(idir: &Path, kind: ProjectKind) -> PathBuf { idir.join("minec
 
 pub fn list_installed(store: &InstanceStore, id: &str) -> Result<Vec<InstalledMod>, CoreError> {
     Ok(Manifest::load(&store.instance_dir(id)?)?.items)
+}
+
+/// Titles of installed projects that list `project_id` as a required dependency.
+pub fn dependents(store: &InstanceStore, id: &str, project_id: &str) -> Result<Vec<String>, CoreError> {
+    Ok(Manifest::load(&store.instance_dir(id)?)?.items.into_iter()
+        .filter(|i| i.requires.iter().any(|r| r == project_id)).map(|i| i.title).collect())
 }
 
 pub fn remove_installed(store: &InstanceStore, id: &str, project_id: &str) -> Result<(), CoreError> {
@@ -189,7 +200,7 @@ mod tests {
             let dir = content_dir(&idir, ProjectKind::Mod);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("m.jar"), b"x").unwrap();
-            let m = Manifest { items: vec![InstalledMod { project_id: "P".into(), version_id: "v".into(), title: "M".into(), version_number: "1".into(), kind: ProjectKind::Mod, filename: "m.jar".into(), sha512: "h".into() }] };
+            let m = Manifest { items: vec![InstalledMod { project_id: "P".into(), version_id: "v".into(), title: "M".into(), version_number: "1".into(), kind: ProjectKind::Mod, filename: "m.jar".into(), sha512: "h".into(), requires: vec![] }] };
             m.save(&idir).unwrap();
             ids.push(idir);
         }
@@ -198,6 +209,18 @@ mod tests {
         assert!(content_dir(&ids[1], ProjectKind::Mod).join("m.jar").exists());
         assert_eq!(list_installed(&s, &a.id).unwrap().len(), 0);
         assert_eq!(list_installed(&s, &b.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn finds_dependents() {
+        let t = tempfile::tempdir().unwrap();
+        let s = InstanceStore::new(t.path());
+        let a = s.create("A", "1.20.1", Loader::Fabric).unwrap();
+        let idir = s.instance_dir(&a.id).unwrap();
+        let mk = |p: &str, req: Vec<&str>| InstalledMod { project_id: p.into(), version_id: "v".into(), title: p.to_uppercase(), version_number: "1".into(), kind: ProjectKind::Mod, filename: format!("{p}.jar"), sha512: "h".into(), requires: req.into_iter().map(String::from).collect() };
+        Manifest { items: vec![mk("lib", vec![]), mk("a", vec!["lib"]), mk("b", vec!["lib"]), mk("c", vec![])] }.save(&idir).unwrap();
+        assert_eq!(dependents(&s, &a.id, "lib").unwrap(), vec!["A".to_string(), "B".to_string()]);
+        assert!(dependents(&s, &a.id, "c").unwrap().is_empty());
     }
 
     #[test]

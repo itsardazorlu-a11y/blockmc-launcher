@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { api, Instance, Loader } from "../api";
 import CreateInstance from "../components/CreateInstance";
 import InstancePage from "./InstancePage";
+import ModpackDialog from "../components/ModpackDialog";
 
 export default function Library() {
   const [items, setItems] = useState<Instance[]>([]);
   const [q, setQ] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [creating, setCreating] = useState(false);
+  const [packs, setPacks] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<Instance | null>(null);
 
@@ -29,6 +31,7 @@ export default function Library() {
         <h1>Library</h1>
         <input className="field" style={{ width: 220 }} placeholder="Search instances" value={q} onChange={(e) => setQ(e.target.value)} />
         <button className="btn" onClick={() => setView(view === "grid" ? "list" : "grid")}>{view === "grid" ? "List view" : "Grid view"}</button>
+        <button className="btn" onClick={() => setPacks(true)}>Install modpack</button>
         <button className="btn primary" onClick={() => setCreating(true)}>New instance</button>
       </div>
       {error && <p className="err">{error}</p>}
@@ -46,6 +49,7 @@ export default function Library() {
           ))}
         </div>
       )}
+      {packs && <ModpackDialog onClose={() => setPacks(false)} onInstalled={() => { setPacks(false); load(); }} />}
       {creating && <CreateInstance onClose={() => setCreating(false)} onCreated={() => { setCreating(false); load(); }} />}
     </>
   );

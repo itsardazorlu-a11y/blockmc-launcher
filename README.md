@@ -22,6 +22,6 @@ Push a tag like `v0.1.0`; `.github/workflows/release.yml` builds a draft GitHub 
 ## Status: beta (mod manager)
 Working: instances, Modrinth search for mods / resource packs / shader packs filtered to the instance's
 Minecraft version and loader, install with required dependencies, SHA-512 verified downloads from the
-Modrinth CDN only, remove, update check and update, open instance folder.
-Not built: downloading or launching Minecraft, accounts, Java, CurseForge, modpacks, website, backups.
+Modrinth CDN only, remove (with a warning if other mods need it), update check and update (also installs new required dependencies), sorting, load-more paging, open instance folder, and one-click Modrinth modpack (.mrpack) install into a new instance (checksum-verified, rolled back if anything fails).
+Not built: downloading or launching Minecraft, accounts, Java, CurseForge, website, backups.
 Point your launcher (or the game's own folder setting) at an instance's `minecraft` folder to use the files.

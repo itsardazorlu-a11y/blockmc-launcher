@@ -24,9 +24,19 @@ fn create_instance(name: String, mc_version: String, loader: Loader) -> Result<I
 fn delete_instance(id: String) -> Result<(), String> { store()?.delete(&id).map_err(|e| e.to_string()) }
 
 #[tauri::command]
-async fn search_mods(mr: State<'_, Modrinth>, instance_id: String, kind: ProjectKind, query: String) -> Result<Vec<Hit>, String> {
+async fn search_mods(mr: State<'_, Modrinth>, instance_id: String, kind: ProjectKind, query: String, sort: String, offset: u32) -> Result<Vec<Hit>, String> {
     let (_, inst) = load(&instance_id)?;
-    mr.search(&inst, kind, &query).await.map_err(|e| e.to_string())
+    mr.search(&inst, kind, &query, &sort, offset).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn search_modpacks(mr: State<'_, Modrinth>, query: String, sort: String, offset: u32) -> Result<Vec<Hit>, String> {
+    mr.search_modpacks(&query, &sort, offset).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn install_modpack(mr: State<'_, Modrinth>, project_id: String) -> Result<InstanceConfig, String> {
+    mr.install_modpack(&store()?, &project_id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -38,6 +48,11 @@ async fn install_project(mr: State<'_, Modrinth>, instance_id: String, project_i
 #[tauri::command]
 fn list_installed(instance_id: String) -> Result<Vec<InstalledMod>, String> {
     blockmc_core::mods::list_installed(&store()?, &instance_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn dependents(instance_id: String, project_id: String) -> Result<Vec<String>, String> {
+    blockmc_core::mods::dependents(&store()?, &instance_id, &project_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -76,7 +91,7 @@ pub fn run() {
         .manage(Modrinth::new())
         .invoke_handler(tauri::generate_handler![
             list_instances, create_instance, delete_instance, search_mods, install_project,
-            list_installed, remove_installed, check_updates, update_project, open_instance_folder
+            search_modpacks, install_modpack, list_installed, remove_installed, dependents, check_updates, update_project, open_instance_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running BlockMC");

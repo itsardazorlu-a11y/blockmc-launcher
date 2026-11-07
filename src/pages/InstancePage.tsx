@@ -17,17 +17,23 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sort, setSort] = useState("relevance");
+  const [more, setMore] = useState(false);
 
   const reload = useCallback(() => api.installed(instance.id).then(setInstalled).catch((e) => setError(String(e))), [instance.id]);
   useEffect(() => { reload(); }, [reload]);
 
-  const search = useCallback(async (kind: Kind, query: string) => {
+  const search = useCallback(async (kind: Kind, query: string, order: string, append = false, offset = 0) => {
     setLoading(true); setError("");
-    try { setHits(await api.search(instance.id, kind, query)); } catch (e) { setHits([]); setError(String(e)); }
+    try {
+      const r = await api.search(instance.id, kind, query, order, offset);
+      setHits((h) => (append ? [...h, ...r.filter((x) => !h.some((y) => y.project_id === x.project_id))] : r));
+      setMore(r.length >= 20);
+    } catch (e) { if (!append) setHits([]); setMore(false); setError(String(e)); }
     setLoading(false);
   }, [instance.id]);
 
-  useEffect(() => { if (tab !== "installed") search(tab, q); /* eslint-disable-next-line */ }, [tab]);
+  useEffect(() => { if (tab !== "installed") search(tab, q, sort); /* eslint-disable-next-line */ }, [tab, sort]);
 
   async function work(key: string, fn: () => Promise<string | void>) {
     setBusy((b) => new Set(b).add(key)); setError(""); setNote("");
@@ -73,7 +79,12 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
                       onClick={() => work(m.project_id, async () => { await api.update(instance.id, m.project_id); setUpdates((x) => x.filter((u) => u.project_id !== m.project_id)); return `${m.title} updated to ${up.latest}.`; })}>
                       Update to {up.latest}</button>}
                     <button className="btn danger" disabled={busy.has(m.project_id)}
-                      onClick={() => work(m.project_id, async () => { await api.uninstall(instance.id, m.project_id); return `${m.title} removed.`; })}>Remove</button>
+                      onClick={() => work(m.project_id, async () => {
+                        const deps = await api.dependents(instance.id, m.project_id);
+                        if (deps.length && !window.confirm(`${deps.join(", ")} need${deps.length === 1 ? "s" : ""} ${m.title}. Remove it anyway?`)) return;
+                        await api.uninstall(instance.id, m.project_id);
+                        return `${m.title} removed.`;
+                      })}>Remove</button>
                   </div>
                 );
               })}
@@ -82,8 +93,12 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
         </>
       ) : (
         <>
-          <form className="row" style={{ marginBottom: 16 }} onSubmit={(e) => { e.preventDefault(); search(tab, q); }}>
+          <form className="row" style={{ marginBottom: 16 }} onSubmit={(e) => { e.preventDefault(); search(tab, q, sort); }}>
             <input className="field" placeholder="Search Modrinth" value={q} onChange={(e) => setQ(e.target.value)} />
+            <select className="field" style={{ width: 170 }} value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+              <option value="relevance">Relevance</option><option value="downloads">Most downloaded</option>
+              <option value="newest">Newest</option><option value="updated">Recently updated</option>
+            </select>
             <button className="btn primary" type="submit">Search</button>
           </form>
           {loading && <p className="meta">Searching…</p>}
@@ -92,7 +107,7 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
             {hits.map((h) => (
               <div className="card" key={h.project_id}>
                 {h.icon_url ? <img className="icon" src={h.icon_url} alt="" /> : <div className="icon">{h.title.charAt(0)}</div>}
-                <div className="grow"><strong>{h.title}</strong> <span className="meta">by {h.author}</span><div className="meta">{h.description}</div></div>
+                <div className="grow"><strong>{h.title}</strong> <span className="meta">by {h.author} · {Intl.NumberFormat().format(h.downloads)} downloads</span><div className="meta">{h.description}</div></div>
                 {isInstalled(h.project_id)
                   ? <span className="meta">Installed</span>
                   : <button className="btn primary" disabled={busy.has(h.project_id)}
@@ -101,6 +116,8 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
               </div>
             ))}
           </div>
+          {more && !loading && <div className="row" style={{ justifyContent: "center", marginTop: 16 }}>
+            <button className="btn" onClick={() => search(tab, q, sort, true, hits.length)}>Load more</button></div>}
         </>
       )}
     </>

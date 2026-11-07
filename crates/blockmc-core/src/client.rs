@@ -1,5 +1,5 @@
 //! Modrinth API client and the install / update workflows built on mods.rs.
-use crate::{error::CoreError, instance::{InstanceConfig, InstanceStore}, mods::*};
+use crate::{error::CoreError, instance::{InstanceConfig, InstanceStore}, modpack, mods::*};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use std::{collections::HashSet, fs, io::Write, path::Path};
@@ -34,7 +34,9 @@ impl Modrinth {
         Self { http: reqwest::Client::builder().user_agent(UA).build().expect("http client") }
     }
 
-    pub async fn search(&self, inst: &InstanceConfig, kind: ProjectKind, query: &str) -> Result<Vec<Hit>, CoreError> {
+    pub async fn search(&self, inst: &InstanceConfig, kind: ProjectKind, query: &str, sort: &str, offset: u32) -> Result<Vec<Hit>, CoreError> {
+        let sort = if ["relevance", "downloads", "follows", "newest", "updated"].contains(&sort) { sort } else { "relevance" };
+        let offset = offset.to_string();
         let mut facets: Vec<Vec<String>> = vec![
             vec![format!("project_type:{}", kind.api_name())],
             vec![format!("versions:{}", inst.mc_version)],
@@ -44,7 +46,7 @@ impl Modrinth {
         }
         let facets = serde_json::to_string(&facets)?;
         let resp: SearchResponse = self.http.get(format!("{API}/search"))
-            .query(&[("query", query), ("facets", facets.as_str()), ("limit", "20")])
+            .query(&[("query", query), ("facets", facets.as_str()), ("limit", "20"), ("index", sort), ("offset", offset.as_str())])
             .send().await?.error_for_status()?.json().await?;
         Ok(resp.hits)
     }
@@ -67,7 +69,6 @@ impl Modrinth {
 
     /// Streams the file to `<name>.part`, hashes while writing, and only keeps it if the SHA-512 matches.
     async fn download(&self, file: &VersionFile, dir: &Path, filename: &str) -> Result<String, CoreError> {
-        ensure_trusted_url(&file.url)?;
         fs::create_dir_all(dir)?;
         let part = dir.join(format!("{filename}.part"));
         let mut resp = self.http.get(&file.url).send().await?.error_for_status()?;
@@ -108,15 +109,72 @@ impl Modrinth {
         let mut done = vec![];
         for (pid, v) in plan {
             let file = pick_primary(&v).ok_or_else(|| CoreError::NoCompatibleVersion(pid.clone()))?;
+            ensure_trusted_url(&file.url)?;
             let filename = safe_filename(&file.filename, kind)?;
             let title = self.project_title(&pid).await.unwrap_or_else(|_| pid.clone());
             let sha512 = self.download(file, &dir, &filename).await?;
-            let rec = InstalledMod { project_id: pid, version_id: v.id.clone(), title, version_number: v.version_number.clone(), kind, filename, sha512 };
+            let rec = InstalledMod { project_id: pid, version_id: v.id.clone(), title, version_number: v.version_number.clone(), kind, filename, sha512, requires: required_deps(&v) };
             manifest.items.push(rec.clone());
             manifest.save(&idir)?;
             done.push(rec);
         }
         Ok(done)
+    }
+
+    pub async fn search_modpacks(&self, query: &str, sort: &str, offset: u32) -> Result<Vec<Hit>, CoreError> {
+        let sort = if ["relevance", "downloads", "follows", "newest", "updated"].contains(&sort) { sort } else { "relevance" };
+        let offset = offset.to_string();
+        let facets = serde_json::to_string(&vec![vec!["project_type:modpack"]])?;
+        let resp: SearchResponse = self.http.get(format!("{API}/search"))
+            .query(&[("query", query), ("facets", facets.as_str()), ("limit", "20"), ("index", sort), ("offset", offset.as_str())])
+            .send().await?.error_for_status()?.json().await?;
+        Ok(resp.hits)
+    }
+
+    /// Installs a Modrinth modpack (.mrpack) into a brand-new instance. If anything fails the new
+    /// instance is deleted again, so a broken download never leaves a half-installed pack behind.
+    pub async fn install_modpack(&self, store: &InstanceStore, project_id: &str) -> Result<InstanceConfig, CoreError> {
+        if !valid_project_id(project_id) { return Err(CoreError::InvalidProject) }
+        let title = self.project_title(project_id).await?;
+        let versions: Vec<Version> = self.http.get(format!("{API}/project/{project_id}/version"))
+            .send().await?.error_for_status()?.json().await?;
+        let v = pick_version(&versions).ok_or_else(|| CoreError::NoCompatibleVersion(title.clone()))?.clone();
+        let file = pick_primary(&v).ok_or_else(|| CoreError::NoCompatibleVersion(title.clone()))?;
+        ensure_trusted_url(&file.url)?;
+        let filename = safe_name_with_ext(&file.filename, ".mrpack")?;
+        let tmp = std::env::temp_dir().join(format!("blockmc-{}", v.id));
+        fs::create_dir_all(&tmp)?;
+        let result = self.install_pack_file(store, &title, file, &tmp, &filename).await;
+        let _ = fs::remove_dir_all(&tmp);
+        result
+    }
+
+    async fn install_pack_file(&self, store: &InstanceStore, title: &str, file: &VersionFile, tmp: &Path, filename: &str) -> Result<InstanceConfig, CoreError> {
+        self.download(file, tmp, filename).await?;
+        let pack = tmp.join(filename);
+        let index = modpack::read_index(&pack)?;
+        let (mc, loader) = modpack::target(&index)?;
+        let inst = store.create(title, &mc, loader)?;
+        match self.fill_instance(store, &inst, &index, &pack).await {
+            Ok(()) => Ok(inst),
+            Err(e) => { let _ = store.delete(&inst.id); Err(e) }
+        }
+    }
+
+    async fn fill_instance(&self, store: &InstanceStore, inst: &InstanceConfig, index: &modpack::Index, pack: &Path) -> Result<(), CoreError> {
+        let mc_dir = store.instance_dir(&inst.id)?.join("minecraft");
+        for f in &index.files {
+            if f.env.as_ref().map(|e| e.client == "unsupported").unwrap_or(false) { continue }
+            let rel = modpack::safe_rel_path(&f.path)?;
+            let url = f.downloads.iter().find(|u| modpack::trusted_pack_url(u))
+                .ok_or_else(|| CoreError::UntrustedUrl(f.downloads.first().cloned().unwrap_or_default()))?;
+            let dest = mc_dir.join(&rel);
+            let dir = dest.parent().ok_or_else(|| CoreError::UnsafeFilename(f.path.clone()))?;
+            let name = dest.file_name().and_then(|n| n.to_str()).ok_or_else(|| CoreError::UnsafeFilename(f.path.clone()))?;
+            let vf = VersionFile { hashes: FileHashes { sha512: f.hashes.sha512.clone() }, url: url.clone(), filename: name.to_string(), primary: true };
+            self.download(&vf, dir, name).await?;
+        }
+        modpack::extract_overrides(pack, &mc_dir)
     }
 
     pub async fn check_updates(&self, store: &InstanceStore, inst: &InstanceConfig) -> Result<Vec<UpdateInfo>, CoreError> {
@@ -142,6 +200,7 @@ impl Modrinth {
         let v = pick_version(&versions).ok_or_else(|| CoreError::NoCompatibleVersion(old.title.clone()))?.clone();
         if v.id == old.version_id { return Ok(()) }
         let file = pick_primary(&v).ok_or_else(|| CoreError::NoCompatibleVersion(old.title.clone()))?;
+        ensure_trusted_url(&file.url)?;
         let filename = safe_filename(&file.filename, old.kind)?;
         let dir = content_dir(&idir, old.kind);
         let sha512 = self.download(file, &dir, &filename).await?;
@@ -149,8 +208,18 @@ impl Modrinth {
             let old_file = dir.join(safe_filename(&old.filename, old.kind)?);
             if old_file.exists() { fs::remove_file(old_file)?; }
         }
-        manifest.items[pos] = InstalledMod { version_id: v.id, version_number: v.version_number, filename, sha512, ..old };
+        let requires = required_deps(&v);
+        manifest.items[pos] = InstalledMod { version_id: v.id, version_number: v.version_number, filename, sha512, requires: requires.clone(), ..old };
         manifest.save(&idir)?;
+        // A newer version may need libraries the old one didn't.
+        if old.kind == ProjectKind::Mod {
+            for dep in requires {
+                match self.install(store, inst, &dep, ProjectKind::Mod).await {
+                    Ok(_) | Err(CoreError::AlreadyInstalled) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
         Ok(())
     }
 }
