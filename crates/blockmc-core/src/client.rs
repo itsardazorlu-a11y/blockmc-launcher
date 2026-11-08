@@ -122,28 +122,52 @@ impl Modrinth {
         let mut manifest = Manifest::load(&idir)?;
         if manifest.items.iter().any(|i| i.project_id == project_id) { return Err(CoreError::AlreadyInstalled) }
 
-        let mut plan: Vec<(String, Version)> = vec![];
+        let loaders: Vec<&str> = if kind == ProjectKind::Mod { compatible_loaders(inst.loader)? } else { vec![] };
+        let mut plan: Vec<(String, Version, Vec<String>)> = vec![];
         let mut seen: HashSet<String> = HashSet::new();
-        let mut queue = vec![project_id.to_string()];
-        while let Some(pid) = queue.pop() {
+        let mut queue: Vec<(String, Option<Version>)> = vec![(project_id.to_string(), None)];
+        while let Some((pid, pinned)) = queue.pop() {
             if !seen.insert(pid.clone()) { continue }
             if manifest.items.iter().any(|i| i.project_id == pid) { continue }
             if seen.len() > MAX_PROJECTS_PER_INSTALL { return Err(CoreError::Unsupported("This install needs too many dependencies.".into())) }
-            let versions = self.versions(&pid, inst, kind).await?;
-            let v = pick_version(&versions).ok_or_else(|| CoreError::NoCompatibleVersion(pid.clone()))?.clone();
-            if kind == ProjectKind::Mod { queue.extend(required_deps(&v)); }
-            plan.push((pid, v));
+            // A dependency may name an exact version; use it when it fits this instance, otherwise the newest that does.
+            let v = match pinned.filter(|p| is_compatible(p, &inst.mc_version, &loaders)) {
+                Some(p) => p,
+                None => {
+                    let versions = self.versions(&pid, inst, kind).await?;
+                    match pick_version(&versions) {
+                        Some(v) => v.clone(),
+                        None => {
+                            let title = self.project_title(&pid).await.unwrap_or_else(|_| pid.clone());
+                            return Err(CoreError::NoCompatibleVersion(title));
+                        }
+                    }
+                }
+            };
+            for d in v.dependencies.iter().filter(|d| d.dependency_type == "incompatible") {
+                if let Some(other) = d.project_id.as_ref().and_then(|p| manifest.items.iter().find(|i| &i.project_id == p)) {
+                    return Err(CoreError::Unsupported(format!("This mod is not compatible with {}, which is already installed.", other.title)));
+                }
+            }
+            let mut requires = vec![];
+            if kind == ProjectKind::Mod {
+                for (dep_pid, dep_pinned) in self.required_refs(&v).await? {
+                    requires.push(dep_pid.clone());
+                    queue.push((dep_pid, dep_pinned));
+                }
+            }
+            plan.push((pid, v, requires));
         }
 
         let dir = content_dir(&idir, kind);
         let mut done = vec![];
-        for (pid, v) in plan {
+        for (pid, v, requires) in plan {
             let file = pick_primary(&v).ok_or_else(|| CoreError::NoCompatibleVersion(pid.clone()))?;
             ensure_trusted_url(&file.url)?;
             let filename = safe_filename(&file.filename, kind)?;
             let title = self.project_title(&pid).await.unwrap_or_else(|_| pid.clone());
             let sha512 = self.download(file, &dir, &filename).await?;
-            let rec = InstalledMod { project_id: pid, version_id: v.id.clone(), title, version_number: v.version_number.clone(), kind, filename, sha512, requires: required_deps(&v) };
+            let rec = InstalledMod { project_id: pid, version_id: v.id.clone(), title, version_number: v.version_number.clone(), kind, filename, sha512, requires };
             manifest.items.push(rec.clone());
             manifest.save(&idir)?;
             done.push(rec);
@@ -197,6 +221,48 @@ impl Modrinth {
         modpack::extract_overrides(pack, &mc_dir)
     }
 
+    async fn version_by_id(&self, id: &str) -> Result<Version, CoreError> {
+        if !valid_project_id(id) { return Err(CoreError::InvalidProject) }
+        Ok(self.http.get(format!("{API}/version/{id}")).send().await?.error_for_status()?.json().await?)
+    }
+
+    /// Required dependencies of a version as (project id, exact version if the author pinned one).
+    async fn required_refs(&self, v: &Version) -> Result<Vec<(String, Option<Version>)>, CoreError> {
+        let mut out: Vec<(String, Option<Version>)> = vec![];
+        for d in v.dependencies.iter().filter(|d| d.dependency_type == "required") {
+            match (&d.project_id, &d.version_id) {
+                (Some(p), Some(vid)) => out.push((p.clone(), self.version_by_id(vid).await.ok())),
+                (Some(p), None) => out.push((p.clone(), None)),
+                (None, Some(vid)) => { let pv = self.version_by_id(vid).await?; out.push((pv.project_id.clone(), Some(pv))) }
+                (None, None) => {}
+            }
+        }
+        Ok(out)
+    }
+
+    /// Looks at every installed mod, finds its required dependencies on Modrinth and installs any that are missing.
+    pub async fn repair_dependencies(&self, store: &InstanceStore, inst: &InstanceConfig) -> Result<Vec<InstalledMod>, CoreError> {
+        let idir = store.instance_dir(&inst.id)?;
+        let items: Vec<InstalledMod> = Manifest::load(&idir)?.items.into_iter().filter(|i| i.kind == ProjectKind::Mod).collect();
+        let mut added = vec![];
+        for item in items {
+            let Ok(v) = self.version_by_id(&item.version_id).await else { continue };
+            let Ok(refs) = self.required_refs(&v).await else { continue };
+            let ids: Vec<String> = refs.into_iter().map(|(p, _)| p).collect();
+            let mut m = Manifest::load(&idir)?;
+            if let Some(x) = m.items.iter_mut().find(|x| x.project_id == item.project_id) { x.requires = ids.clone(); }
+            m.save(&idir)?;
+            for dep in ids {
+                match self.install(store, inst, &dep, ProjectKind::Mod).await {
+                    Ok(mut r) => added.append(&mut r),
+                    Err(CoreError::AlreadyInstalled) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(added)
+    }
+
     pub async fn check_updates(&self, store: &InstanceStore, inst: &InstanceConfig) -> Result<Vec<UpdateInfo>, CoreError> {
         let idir = store.instance_dir(&inst.id)?;
         let mut out = vec![];
@@ -228,7 +294,9 @@ impl Modrinth {
             let old_file = dir.join(safe_filename(&old.filename, old.kind)?);
             if old_file.exists() { fs::remove_file(old_file)?; }
         }
-        let requires = required_deps(&v);
+        let requires: Vec<String> = if old.kind == ProjectKind::Mod {
+            self.required_refs(&v).await.unwrap_or_default().into_iter().map(|(p, _)| p).collect()
+        } else { vec![] };
         manifest.items[pos] = InstalledMod { version_id: v.id, version_number: v.version_number, filename, sha512, requires: requires.clone(), ..old };
         manifest.save(&idir)?;
         // A newer version may need libraries the old one didn't.

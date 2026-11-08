@@ -18,13 +18,15 @@ pub struct FileHashes { #[serde(default)] pub sha512: String }
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionFile { pub hashes: FileHashes, pub url: String, pub filename: String, #[serde(default)] pub primary: bool }
 #[derive(Debug, Clone, Deserialize)]
-pub struct Dependency { pub project_id: Option<String>, #[serde(default)] pub dependency_type: String }
+pub struct Dependency { pub project_id: Option<String>, #[serde(default)] pub version_id: Option<String>, #[serde(default)] pub dependency_type: String }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Version {
     pub id: String,
     pub project_id: String,
     #[serde(default)] pub version_number: String,
     #[serde(default)] pub version_type: String,
+    #[serde(default)] pub game_versions: Vec<String>,
+    #[serde(default)] pub loaders: Vec<String>,
     #[serde(default)] pub files: Vec<VersionFile>,
     #[serde(default)] pub dependencies: Vec<Dependency>,
 }
@@ -110,6 +112,11 @@ pub fn required_deps(v: &Version) -> Vec<String> {
     v.dependencies.iter().filter(|d| d.dependency_type == "required").filter_map(|d| d.project_id.clone()).collect()
 }
 
+/// True if this exact version supports the Minecraft version (and, when `loaders` is non-empty, one of them).
+pub fn is_compatible(v: &Version, mc: &str, loaders: &[&str]) -> bool {
+    v.game_versions.iter().any(|g| g == mc) && (loaders.is_empty() || v.loaders.iter().any(|l| loaders.contains(&l.as_str())))
+}
+
 /// Moves a fully downloaded `.part` file into place only if its checksum matches.
 pub fn finalize_download(part: &Path, dest: &Path, actual: &str, expected: &str) -> Result<(), CoreError> {
     if expected.is_empty() { let _ = fs::remove_file(part); return Err(CoreError::HashMissing) }
@@ -179,6 +186,19 @@ mod tests {
         assert_eq!(pick_primary(&v[0]).unwrap().filename, "m-2.0.jar");
         assert_eq!(required_deps(&v[0]), vec!["DEP1".to_string()]);
         assert!(pick_primary(&v[1]).is_none());
+    }
+
+    #[test]
+    fn dependency_can_be_pinned_by_version_only() {
+        let v: Version = serde_json::from_str(r#"{"id":"v","project_id":"P","game_versions":["1.20.1"],"loaders":["fabric"],
+          "dependencies":[{"version_id":"VER1","project_id":null,"dependency_type":"required"},
+                          {"version_id":null,"project_id":"X","dependency_type":"incompatible"}]}"#).unwrap();
+        assert_eq!(v.dependencies[0].version_id.as_deref(), Some("VER1"));
+        assert!(v.dependencies[0].project_id.is_none());
+        assert!(is_compatible(&v, "1.20.1", &["fabric"]));
+        assert!(is_compatible(&v, "1.20.1", &[]));
+        assert!(!is_compatible(&v, "1.21", &["fabric"]));
+        assert!(!is_compatible(&v, "1.20.1", &["forge"]));
     }
 
     #[test]
