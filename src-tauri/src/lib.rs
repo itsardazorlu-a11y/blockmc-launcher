@@ -1,4 +1,4 @@
-use blockmc_core::{Hit, InstalledMod, InstanceConfig, InstanceStore, Loader, Modrinth, ProjectKind, UpdateInfo};
+use blockmc_core::{SearchPage, InstalledMod, InstanceConfig, InstanceStore, Loader, Modrinth, ProjectKind, UpdateInfo};
 use std::{path::{Path, PathBuf}, process::Command};
 use tauri::State;
 
@@ -21,17 +21,42 @@ fn create_instance(name: String, mc_version: String, loader: Loader) -> Result<I
 }
 
 #[tauri::command]
-fn delete_instance(id: String) -> Result<(), String> { store()?.delete(&id).map_err(|e| e.to_string()) }
-
-#[tauri::command]
-async fn search_mods(mr: State<'_, Modrinth>, instance_id: String, kind: ProjectKind, query: String, sort: String, offset: u32) -> Result<Vec<Hit>, String> {
-    let (_, inst) = load(&instance_id)?;
-    mr.search(&inst, kind, &query, &sort, offset).await.map_err(|e| e.to_string())
+fn rename_instance(id: String, name: String) -> Result<InstanceConfig, String> {
+    store()?.rename(&id, &name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn search_modpacks(mr: State<'_, Modrinth>, query: String, sort: String, offset: u32) -> Result<Vec<Hit>, String> {
-    mr.search_modpacks(&query, &sort, offset).await.map_err(|e| e.to_string())
+fn duplicate_instance(id: String) -> Result<InstanceConfig, String> {
+    store()?.duplicate(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_instance(id: String) -> Result<(), String> { store()?.delete(&id).map_err(|e| e.to_string()) }
+
+#[tauri::command]
+async fn search_mods(mr: State<'_, Modrinth>, instance_id: String, kind: ProjectKind, query: String, sort: String, offset: u32, limit: u32) -> Result<SearchPage, String> {
+    let (_, inst) = load(&instance_id)?;
+    mr.search(&inst, kind, &query, &sort, offset, limit).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn search_modpacks(mr: State<'_, Modrinth>, query: String, sort: String, offset: u32, limit: u32, mc_version: Option<String>, loader: Option<String>) -> Result<SearchPage, String> {
+    mr.search_modpacks(&query, &sort, offset, limit, mc_version.as_deref(), loader.as_deref()).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn game_versions(mr: State<'_, Modrinth>) -> Result<Vec<String>, String> {
+    mr.game_versions().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn data_folder() -> Result<String, String> { Ok(data_root()?.to_string_lossy().into_owned()) }
+
+#[tauri::command]
+fn open_data_folder() -> Result<(), String> {
+    let dir = data_root()?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    open_path(&dir)
 }
 
 #[tauri::command]
@@ -90,8 +115,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Modrinth::new())
         .invoke_handler(tauri::generate_handler![
-            list_instances, create_instance, delete_instance, search_mods, install_project,
-            search_modpacks, install_modpack, list_installed, remove_installed, dependents, check_updates, update_project, open_instance_folder
+            list_instances, create_instance, rename_instance, duplicate_instance, delete_instance, search_mods, install_project,
+            search_modpacks, game_versions, data_folder, open_data_folder, install_modpack, list_installed, remove_installed, dependents, check_updates, update_project, open_instance_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running BlockMC");

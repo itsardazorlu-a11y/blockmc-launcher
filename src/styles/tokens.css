@@ -1,15 +1,19 @@
 :root {
   --font: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
-  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 18px;
   --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-6: 24px; --s-8: 32px;
   --t-sm: 13px; --t-md: 15px; --t-lg: 20px; --t-xl: 28px;
   --ease: cubic-bezier(.2,.7,.2,1);
 }
 [data-theme="dark"] {
-  --bg: #121614; --panel: #181e1b; --card: #1e2521; --line: #2a332e;
-  --text: #e8eeea; --muted: #8d9a93; --accent: #4cc38a; --accent-ink: #07130d; --danger: #ef6a5e;
+  color-scheme: dark;
+  --bg: #0f1311; --panel: #151b18; --card: #1b221e; --card-hi: #212a25; --line: #28312c;
+  --text: #e9efeb; --muted: #8f9c95; --accent: #4cc38a; --accent-soft: rgba(76,195,138,.14); --accent-ink: #06130c; --danger: #ef6a5e;
+  --shadow: 0 6px 24px rgba(0,0,0,.28);
 }
 [data-theme="light"] {
-  --bg: #f6f8f6; --panel: #ffffff; --card: #ffffff; --line: #dfe5e1;
-  --text: #17201b; --muted: #5f6d65; --accent: #1f9d62; --accent-ink: #ffffff; --danger: #c93a2e;
+  color-scheme: light;
+  --bg: #f3f6f4; --panel: #ffffff; --card: #ffffff; --card-hi: #f1f5f2; --line: #dde4df;
+  --text: #17201b; --muted: #5d6b63; --accent: #1b9a5f; --accent-soft: rgba(27,154,95,.12); --accent-ink: #ffffff; --danger: #c93a2e;
+  --shadow: 0 6px 20px rgba(20,40,30,.08);
 }

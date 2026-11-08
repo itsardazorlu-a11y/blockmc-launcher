@@ -53,6 +53,31 @@ pub fn compatible_loaders(l: Loader) -> Result<Vec<&'static str>, CoreError> {
     })
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameVersion {
+    pub version: String,
+    #[serde(default)] pub version_type: String,
+    #[serde(default)] pub date: String,
+}
+
+/// Release versions, newest first, down to and including 1.8.
+pub fn release_versions(mut tags: Vec<GameVersion>) -> Vec<String> {
+    tags.retain(|t| t.version_type == "release");
+    tags.sort_by(|a, b| b.date.cmp(&a.date));
+    let mut out: Vec<String> = vec![];
+    for t in tags {
+        if out.contains(&t.version) { continue }
+        let stop = t.version == "1.8";
+        out.push(t.version);
+        if stop { break }
+    }
+    out
+}
+
+pub fn valid_mc_version(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
 pub fn valid_project_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
@@ -221,6 +246,18 @@ mod tests {
         Manifest { items: vec![mk("lib", vec![]), mk("a", vec!["lib"]), mk("b", vec!["lib"]), mk("c", vec![])] }.save(&idir).unwrap();
         assert_eq!(dependents(&s, &a.id, "lib").unwrap(), vec!["A".to_string(), "B".to_string()]);
         assert!(dependents(&s, &a.id, "c").unwrap().is_empty());
+    }
+
+    #[test]
+    fn release_list_is_newest_first_and_stops_at_1_8() {
+        let g = |v: &str, t: &str, d: &str| GameVersion { version: v.into(), version_type: t.into(), date: d.into() };
+        let list = release_versions(vec![
+            g("1.7.10", "release", "2014-05-01"), g("1.8", "release", "2014-09-02"), g("1.21", "release", "2024-06-13"),
+            g("24w14a", "snapshot", "2024-04-03"), g("1.20.1", "release", "2023-06-12"), g("1.21", "release", "2024-06-13"),
+        ]);
+        assert_eq!(list, vec!["1.21", "1.20.1", "1.8"]);
+        assert!(valid_mc_version("1.20.1") && valid_mc_version("26.1"));
+        assert!(!valid_mc_version("1.20 && x") && !valid_mc_version(""));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::{collections::HashSet, fs, io::Write, path::Path};
 
 const API: &str = "https://api.modrinth.com/v2";
 const UA: &str = concat!("blockmc/", env!("CARGO_PKG_VERSION"), " (github.com/itsardazorlu-a11y/BlockMc)");
+const SORTS: [&str; 5] = ["relevance", "downloads", "follows", "newest", "updated"];
 const MAX_PROJECTS_PER_INSTALL: usize = 40;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,9 +17,14 @@ pub struct Hit {
     #[serde(default)] pub icon_url: Option<String>,
     #[serde(default)] pub downloads: u64,
     #[serde(default)] pub author: String,
+    #[serde(default)] pub follows: u64,
+    #[serde(default)] pub categories: Vec<String>,
 }
 #[derive(Deserialize)]
-struct SearchResponse { hits: Vec<Hit> }
+struct SearchResponse { hits: Vec<Hit>, #[serde(default)] total_hits: u64 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchPage { pub hits: Vec<Hit>, pub total_hits: u64 }
 #[derive(Deserialize)]
 struct Project { title: String }
 
@@ -34,9 +40,18 @@ impl Modrinth {
         Self { http: reqwest::Client::builder().user_agent(UA).build().expect("http client") }
     }
 
-    pub async fn search(&self, inst: &InstanceConfig, kind: ProjectKind, query: &str, sort: &str, offset: u32) -> Result<Vec<Hit>, CoreError> {
-        let sort = if ["relevance", "downloads", "follows", "newest", "updated"].contains(&sort) { sort } else { "relevance" };
+    async fn search_raw(&self, query: &str, facets: Vec<Vec<String>>, sort: &str, offset: u32, limit: u32) -> Result<SearchPage, CoreError> {
+        let sort = if SORTS.contains(&sort) { sort } else { "relevance" };
+        let limit = limit.clamp(1, 50).to_string();
         let offset = offset.to_string();
+        let facets = serde_json::to_string(&facets)?;
+        let resp: SearchResponse = self.http.get(format!("{API}/search"))
+            .query(&[("query", query), ("facets", facets.as_str()), ("limit", limit.as_str()), ("index", sort), ("offset", offset.as_str())])
+            .send().await?.error_for_status()?.json().await?;
+        Ok(SearchPage { hits: resp.hits, total_hits: resp.total_hits })
+    }
+
+    pub async fn search(&self, inst: &InstanceConfig, kind: ProjectKind, query: &str, sort: &str, offset: u32, limit: u32) -> Result<SearchPage, CoreError> {
         let mut facets: Vec<Vec<String>> = vec![
             vec![format!("project_type:{}", kind.api_name())],
             vec![format!("versions:{}", inst.mc_version)],
@@ -44,11 +59,26 @@ impl Modrinth {
         if kind == ProjectKind::Mod {
             facets.push(compatible_loaders(inst.loader)?.iter().map(|l| format!("categories:{l}")).collect());
         }
-        let facets = serde_json::to_string(&facets)?;
-        let resp: SearchResponse = self.http.get(format!("{API}/search"))
-            .query(&[("query", query), ("facets", facets.as_str()), ("limit", "20"), ("index", sort), ("offset", offset.as_str())])
-            .send().await?.error_for_status()?.json().await?;
-        Ok(resp.hits)
+        self.search_raw(query, facets, sort, offset, limit).await
+    }
+
+    pub async fn search_modpacks(&self, query: &str, sort: &str, offset: u32, limit: u32, mc_version: Option<&str>, loader: Option<&str>) -> Result<SearchPage, CoreError> {
+        let mut facets: Vec<Vec<String>> = vec![vec!["project_type:modpack".to_string()]];
+        if let Some(v) = mc_version.filter(|v| !v.is_empty()) {
+            if !valid_mc_version(v) { return Err(CoreError::Unsupported("Invalid Minecraft version.".into())) }
+            facets.push(vec![format!("versions:{v}")]);
+        }
+        if let Some(l) = loader.filter(|l| !l.is_empty()) {
+            if !["fabric", "forge", "neoforge", "quilt"].contains(&l) { return Err(CoreError::Unsupported("Unknown mod loader.".into())) }
+            facets.push(vec![format!("categories:{l}")]);
+        }
+        self.search_raw(query, facets, sort, offset, limit).await
+    }
+
+    /// Release versions Modrinth knows about, newest first, down to 1.8.
+    pub async fn game_versions(&self) -> Result<Vec<String>, CoreError> {
+        let tags: Vec<GameVersion> = self.http.get(format!("{API}/tag/game_version")).send().await?.error_for_status()?.json().await?;
+        Ok(release_versions(tags))
     }
 
     async fn project_title(&self, project_id: &str) -> Result<String, CoreError> {
@@ -119,16 +149,6 @@ impl Modrinth {
             done.push(rec);
         }
         Ok(done)
-    }
-
-    pub async fn search_modpacks(&self, query: &str, sort: &str, offset: u32) -> Result<Vec<Hit>, CoreError> {
-        let sort = if ["relevance", "downloads", "follows", "newest", "updated"].contains(&sort) { sort } else { "relevance" };
-        let offset = offset.to_string();
-        let facets = serde_json::to_string(&vec![vec!["project_type:modpack"]])?;
-        let resp: SearchResponse = self.http.get(format!("{API}/search"))
-            .query(&[("query", query), ("facets", facets.as_str()), ("limit", "20"), ("index", sort), ("offset", offset.as_str())])
-            .send().await?.error_for_status()?.json().await?;
-        Ok(resp.hits)
     }
 
     /// Installs a Modrinth modpack (.mrpack) into a brand-new instance. If anything fails the new

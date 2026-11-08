@@ -81,12 +81,50 @@ impl InstanceStore {
         Ok(out)
     }
 
+    pub fn rename(&self, id: &str, new_name: &str) -> Result<InstanceConfig, CoreError> {
+        let name = new_name.trim();
+        if name.is_empty() { return Err(CoreError::EmptyName) }
+        let mut cfg = self.get(id)?;
+        cfg.name = name.to_string();
+        write_atomic(&self.instance_dir(id)?.join("instance.json"), &serde_json::to_vec_pretty(&cfg)?)?;
+        Ok(cfg)
+    }
+
+    /// Full independent copy of an instance (its own folder, mods and worlds).
+    pub fn duplicate(&self, id: &str) -> Result<InstanceConfig, CoreError> {
+        let mut cfg = self.get(id)?;
+        let src = self.instance_dir(id)?;
+        let base = slugify(&format!("{} copy", cfg.name));
+        let base = if base.is_empty() { "copy".to_string() } else { base };
+        let mut new_id = base.clone();
+        let mut n = 2;
+        while self.instance_dir(&new_id)?.exists() { new_id = format!("{base}-{n}"); n += 1; }
+        let dest = self.instance_dir(&new_id)?;
+        if let Err(e) = copy_dir(&src, &dest) { let _ = fs::remove_dir_all(&dest); return Err(e.into()) }
+        cfg.id = new_id;
+        cfg.name = format!("{} (copy)", cfg.name);
+        if let Err(e) = write_atomic(&dest.join("instance.json"), &serde_json::to_vec_pretty(&cfg)?) { let _ = fs::remove_dir_all(&dest); return Err(e.into()) }
+        Ok(cfg)
+    }
+
     pub fn delete(&self, id: &str) -> Result<(), CoreError> {
         let dir = self.instance_dir(id)?;
         if !dir.join("instance.json").exists() { return Err(CoreError::NotFound) }
         fs::remove_dir_all(dir)?;
         Ok(())
     }
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if ty.is_dir() { copy_dir(&entry.path(), &target)?; }
+        else if ty.is_file() { fs::copy(entry.path(), &target)?; }
+    }
+    Ok(())
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -119,6 +157,30 @@ mod tests {
         let a = s.create("A", "1.21", Loader::Vanilla).unwrap();
         let b = s.create("B", "1.21", Loader::Quilt).unwrap();
         assert_ne!(s.instance_dir(&a.id).unwrap(), s.instance_dir(&b.id).unwrap());
+    }
+
+    #[test]
+    fn rename_and_duplicate_are_independent() {
+        let t = tempfile::tempdir().unwrap();
+        let s = InstanceStore::new(t.path());
+        let a = s.create("Base", "1.21", Loader::Fabric).unwrap();
+        let mods = s.instance_dir(&a.id).unwrap().join("minecraft").join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        fs::write(mods.join("x.jar"), b"1").unwrap();
+
+        let r = s.rename(&a.id, "  Renamed ").unwrap();
+        assert_eq!(r.name, "Renamed");
+        assert_eq!(s.get(&a.id).unwrap().name, "Renamed");
+        assert!(matches!(s.rename(&a.id, " "), Err(CoreError::EmptyName)));
+
+        let b = s.duplicate(&a.id).unwrap();
+        assert_ne!(a.id, b.id);
+        assert_eq!(b.name, "Renamed (copy)");
+        let copied = s.instance_dir(&b.id).unwrap().join("minecraft").join("mods").join("x.jar");
+        assert!(copied.exists());
+        fs::write(&copied, b"changed").unwrap();
+        assert_eq!(fs::read(mods.join("x.jar")).unwrap(), b"1");
+        assert_eq!(s.get(&b.id).unwrap().id, b.id);
     }
 
     #[test]

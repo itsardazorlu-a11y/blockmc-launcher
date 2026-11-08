@@ -1,27 +1,30 @@
 # BlockMC
 
-Modern Minecraft Java launcher. Tauri 2 + Rust + React/TypeScript. License: GPL-3.0-or-later
+Mod and modpack manager for Minecraft Java, powered by Modrinth. Tauri 2 + Rust + React/TypeScript.
+Runs on Ubuntu/Debian Linux and Windows. License: GPL-3.0-or-later.
+BlockMC does not download or launch Minecraft: it manages mods, resource packs, shaders and modpacks in isolated
+instances. Point your launcher at an instance's `minecraft` folder (Open folder button) to use the files.
 
+## Set up (once)
+Ubuntu / Debian (22.04+): `./scripts/setup-ubuntu.sh`, then open a new terminal.
+Windows: install (1) Node.js 20+, (2) Rust from https://rustup.rs, (3) "Desktop development with C++" from
+Visual Studio Build Tools. Windows 10/11 already has WebView2.
 
-## Run
+## Run and test
     npm install
-    npm run tauri dev
+    npm run tauri dev          # start the app
+    npm run check              # typecheck + Rust tests + build (or ./scripts/check.sh)
+Full checklist: docs/TESTING.md
 
-## Test
-    cargo test -p blockmc-core
+## Build installers locally
+    npm run tauri build        # Ubuntu: .deb/.AppImage, Windows: .msi/.exe in src-tauri/target/release/bundle
+
+## Release
+See docs/RELEASING.md (push a tag like `v1.0.0`; GitHub Actions builds the installers).
 
 ## Layout
-- crates/blockmc-core  platform-independent logic (instances now; installs, Java, launch later)
-- src-tauri            thin Tauri command layer
-- src                  React UI, design tokens in src/styles/tokens.css
+- crates/blockmc-core  platform-independent logic: instances, Modrinth client, modpacks, safe downloads (unit-tested)
+- src-tauri            Tauri commands
+- src                  React UI
 
-## Releases (Linux and Windows)
-Push a tag like `v0.1.0`; `.github/workflows/release.yml` builds a draft GitHub release with a Linux
-.deb/.AppImage and a Windows installer (.msi/.exe).
-
-## Status: beta (mod manager)
-Working: instances, Modrinth search for mods / resource packs / shader packs filtered to the instance's
-Minecraft version and loader, install with required dependencies, SHA-512 verified downloads from the
-Modrinth CDN only, remove (with a warning if other mods need it), update check and update (also installs new required dependencies), sorting, load-more paging, open instance folder, and one-click Modrinth modpack (.mrpack) install into a new instance (checksum-verified, rolled back if anything fails).
-Not built: downloading or launching Minecraft, accounts, Java, CurseForge, website, backups.
-Point your launcher (or the game's own folder setting) at an instance's `minecraft` folder to use the files.
+Data lives in `~/.local/share/BlockMC` (Linux) or `%APPDATA%\BlockMC` (Windows).
