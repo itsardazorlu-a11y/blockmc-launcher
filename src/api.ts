@@ -23,6 +23,7 @@ export const api = {
   installModpack: (projectId: string) => invoke<Instance>("install_modpack", { projectId }),
   install: (instanceId: string, projectId: string, kind: Kind) => invoke<InstalledMod[]>("install_project", { instanceId, projectId, kind }),
   installed: (instanceId: string) => invoke<InstalledMod[]>("list_installed", { instanceId }),
+  repairDeps: (instanceId: string) => invoke<InstalledMod[]>("repair_dependencies", { instanceId }),
   dependents: (instanceId: string, projectId: string) => invoke<string[]>("dependents", { instanceId, projectId }),
   uninstall: (instanceId: string, projectId: string) => invoke<void>("remove_installed", { instanceId, projectId }),
   checkUpdates: (instanceId: string) => invoke<UpdateInfo[]>("check_updates", { instanceId }),

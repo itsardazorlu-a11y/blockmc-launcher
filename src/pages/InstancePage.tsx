@@ -53,6 +53,10 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
               onClick={() => work("check", async () => { const u = await api.checkUpdates(instance.id); setUpdates(u); return u.length ? `${u.length} update(s) available.` : "Everything is up to date."; })}>
               {busy.has("check") ? "Checking…" : "Check for updates"}
             </button>
+            <button className="btn" disabled={busy.has("deps") || installed.length === 0}
+              onClick={() => work("deps", async () => { const r = await api.repairDeps(instance.id); return r.length ? `Installed missing dependencies: ${r.map((m) => m.title).join(", ")}.` : "No missing dependencies. Everything these mods need is installed."; })}>
+              {busy.has("deps") ? "Checking…" : "Fix missing dependencies"}
+            </button>
           </div>
           {installed.length === 0 ? (
             <div className="empty"><h2>Nothing installed</h2><p>Open the Mods, Resource packs or Shader packs tab to add some.</p></div>
@@ -88,7 +92,7 @@ export default function InstancePage({ instance, onBack }: { instance: Instance;
           action={(h) => isInstalled(h.project_id)
             ? <span className="meta">✓ Installed</span>
             : <button className="btn primary" disabled={busy.has(h.project_id)}
-                onClick={() => work(h.project_id, async () => { const r = await api.install(instance.id, h.project_id, tab); return r.length > 1 ? `Installed ${h.title} and ${r.length - 1} required dependency(ies).` : `Installed ${h.title}.`; })}>
+                onClick={() => work(h.project_id, async () => { const r = await api.install(instance.id, h.project_id, tab); return r.length > 1 ? `Installed ${h.title} and its required dependencies: ${r.slice(1).map((m) => m.title).join(", ")}.` : `Installed ${h.title}.`; })}>
                 {busy.has(h.project_id) ? "Installing…" : "Install"}</button>}
         />
       )}
