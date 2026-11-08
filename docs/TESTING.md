@@ -17,7 +17,6 @@ Mods
 - [ ] Open the instance, Mods tab: results load. Change sort to "Download count": the order changes. Go to page 2 and page 3: results change. Change "Show" to 50.
 - [ ] Install "Fabric API". The Installed tab lists it and the jar exists in the folder `mods`.
 - [ ] Install a mod that needs Fabric API (for example Sodium or Lithium): it installs, and the message mentions dependencies if any were added.
-- [ ] Install a mod by itself in a fresh Fabric instance: its required libraries (Fabric API, etc.) are installed too and named in the message. Delete Fabric API's jar entry with Remove, then press "Fix missing dependencies": it comes back.
 - [ ] Remove Fabric API while another mod needs it: a confirm dialog warns you. Cancel keeps it.
 - [ ] Check for updates works (it may say everything is up to date).
 - [ ] Resource packs and Shader packs tabs install a .zip into `resourcepacks` / `shaderpacks`.
@@ -38,6 +37,6 @@ Look and feel
 
 ## 4. Test the installer itself
 Download the installers from the draft GitHub release and install them on a clean machine or VM:
-- Ubuntu: `sudo apt install ./BlockMC_1.0.1_amd64.deb` then start "BlockMC" from the menu.
+- Ubuntu: `sudo apt install ./BlockMC_1.0.0_amd64.deb` then start "BlockMC" from the menu.
 - Windows: run the `.msi` or `-setup.exe`. Windows SmartScreen warns about unsigned apps: choose "More info" then "Run anyway".
 Repeat the first three items of the manual checklist. Only then publish the release.

@@ -71,12 +71,6 @@ async fn install_project(mr: State<'_, Modrinth>, instance_id: String, project_i
 }
 
 #[tauri::command]
-async fn repair_dependencies(mr: State<'_, Modrinth>, instance_id: String) -> Result<Vec<InstalledMod>, String> {
-    let (s, inst) = load(&instance_id)?;
-    mr.repair_dependencies(&s, &inst).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 fn list_installed(instance_id: String) -> Result<Vec<InstalledMod>, String> {
     blockmc_core::mods::list_installed(&store()?, &instance_id).map_err(|e| e.to_string())
 }
@@ -122,7 +116,7 @@ pub fn run() {
         .manage(Modrinth::new())
         .invoke_handler(tauri::generate_handler![
             list_instances, create_instance, rename_instance, duplicate_instance, delete_instance, search_mods, install_project,
-            search_modpacks, game_versions, data_folder, open_data_folder, install_modpack, repair_dependencies, list_installed, remove_installed, dependents, check_updates, update_project, open_instance_folder
+            search_modpacks, game_versions, data_folder, open_data_folder, install_modpack, list_installed, remove_installed, dependents, check_updates, update_project, open_instance_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running BlockMC");
