@@ -18,13 +18,3 @@ Full checklist: docs/TESTING.md
 
 ## Build installers locally
     npm run tauri build        # Ubuntu: .deb/.AppImage, Windows: .msi/.exe in src-tauri/target/release/bundle
-
-## Release
-See docs/RELEASING.md (push a tag like `v1.0.0`; GitHub Actions builds the installers).
-
-## Layout
-- crates/blockmc-core  platform-independent logic: instances, Modrinth client, modpacks, safe downloads (unit-tested)
-- src-tauri            Tauri commands
-- src                  React UI
-
-Data lives in `~/.local/share/BlockMC` (Linux) or `%APPDATA%\BlockMC` (Windows).
